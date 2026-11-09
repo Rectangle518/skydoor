@@ -1,0 +1,25 @@
+[project]
+name = "skydoor"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "luyy86", email = "luyy86@mail2.sysu.edu.cn" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=3.46.0",
+    "pydantic>=2.14.3",
+    "python-dotenv>=1.2.4",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
+]
