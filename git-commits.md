@@ -24,3 +24,9 @@ src/skydoor/
 
 examples/basic_chat.py  两段用法示例
 ```
+
+## v0.1.1
+
+fix: 修复 `Agent` 的 `__init__` 方法，同时完善了 `temperature`、`max_tokens`、`timeout` 参数
+
+feat: 实现了 messages_provider 和 responses_provider
