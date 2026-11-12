@@ -1,9 +1,11 @@
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 
 from ...core.context import LLMRequest, LLMResponse
-from ._common import split_system_prompt
+from ...errors.exception import LLMError
+from ._common import require_text, split_system_prompt
+from ._openai import openai_error
 
 
 # Responses API
@@ -21,7 +23,9 @@ class ResponsesProvider:
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
-        self.client = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
+        self.client = AsyncOpenAI(
+            base_url=self.base_url, api_key=self.api_key, max_retries=0
+        )
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
 
@@ -42,16 +46,41 @@ class ResponsesProvider:
         if request.timeout is not None:
             params["timeout"] = request.timeout
 
-        resp = await self.client.responses.create(**params)
+        try:
+            resp = await self.client.responses.create(**params)
+        except OpenAIError as e:
+            raise openai_error(e) from e
 
-        # Responses API 的 status 取值是 completed / incomplete / failed 等，
-        # 这里把 completed 归一化成和 Chat Completion 一致的 "stop"
         status = getattr(resp, "status", None)
-        finish_reason = "stop" if status == "completed" else status
+        if status == "incomplete":
+            details = getattr(resp, "incomplete_details", None)
+            reason = getattr(details, "reason", None)
+            if reason in ("max_output_tokens", "max_messages"):
+                raise LLMError("LLM 输出达到长度上限")
+            if reason == "content_filter":
+                raise LLMError("LLM 输出被内容过滤")
+            raise LLMError("Responses 输出未完成")
+        if status == "failed":
+            error = getattr(resp, "error", None)
+            code = getattr(error, "code", None)
+            if code == "rate_limit_exceeded":
+                raise LLMError("LLM 请求频率受限", retryable=True)
+            if code in ("server_error", "vector_store_timeout"):
+                raise LLMError("LLM 服务暂时不可用", retryable=True)
+            raise LLMError("Responses 生成回复失败")
+        if status != "completed":
+            raise LLMError("Responses 未正常结束")
+
+        try:
+            output_text = resp.output_text
+        except (AttributeError, TypeError) as e:
+            raise LLMError("Responses 输出格式错误") from e
+        content = require_text(output_text)
+        usage = getattr(resp, "usage", None)
 
         return LLMResponse(
-            content=resp.output_text or "",
+            content=content,
             model=request.model,
-            finish_reason=finish_reason,
-            usage=resp.usage.total_tokens if resp.usage is not None else None,
+            finish_reason="stop",
+            usage=usage.total_tokens if usage is not None else None,
         )

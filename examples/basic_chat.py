@@ -1,51 +1,34 @@
-from skydoor.core.agent import Agent
-
-from dotenv import load_dotenv
 import asyncio
 import os
+import sys
 
-load_dotenv()
+from dotenv import load_dotenv
 
-# 用法一：已废弃
-
-# from skydoor.llm.providers.chat_completion_provider import ChatCompletionProvider
-
-# llm_1 = ChatCompletionProvider(
-#     base_url="",
-#     api_key="",
-#     model="",
-# )
-
-# agent_1 = Agent(
-#     llm=llm_1,
-#     system_prompt="You are a helpful assistant.",
-# )
-
-# response_1 = agent_1.run("Hello, how are you?")
-
-# print(response_1)
+from skydoor.core.agent import Agent
+from skydoor.errors.exception import LLMError
 
 
-# 用法二：目前支持的用法
+async def run_agent() -> None:
+    load_dotenv()
+    agent = Agent(
+        base_url=os.getenv("AGNES_BASE_URL"),
+        api_key=os.getenv("AGNES_API_KEY"),
+        model=os.getenv("AGNES_MODEL"),
+        system_prompt="You are a helpful assistant.",
+        llm_api_type="chat_completion",
+        temperature=0.9,
+        max_tokens=1024,
+        timeout=60,
+    )
 
-agent_2 = Agent(
-    base_url=os.getenv("AGNES_BASE_URL"),
-    api_key=os.getenv("AGNES_API_KEY"),
-    model=os.getenv("AGNES_MODEL"),
-    system_prompt="You are a helpful assistant.",
-    llm_api_type="chat_completion",
-    temperature=0.9,
-    max_tokens=1024,
-    timeout=60
-)
+    # 同一 Agent 需要等待上一轮完成后再开始下一轮。
+    print(await agent.run("Hello, I am Yuyang. My friend is Kanghao."), end="\n\n")
+    print(await agent.run("Who is my friend?"), end="\n\n")
 
-async def run_agent():
-
-    response_2 = await agent_2.run("Hello, I am Yuyang. My friend is Kanghao.")
-    print(response_2, end="\n\n")
-
-    response_2 = await agent_2.run("Who is my friend?")
-    print(response_2, end="\n\n")
 
 if __name__ == "__main__":
-    asyncio.run(run_agent())
+    try:
+        asyncio.run(run_agent())
+    except LLMError as error:
+        print(f"对话失败：{error}", file=sys.stderr)
+        raise SystemExit(1) from None
