@@ -1,7 +1,13 @@
 from skydoor.core.agent import Agent
-import asyncio
 
-# 用法一
+from dotenv import load_dotenv
+import asyncio
+import os
+
+load_dotenv()
+
+# 用法一：已废弃
+
 # from skydoor.llm.providers.chat_completion_provider import ChatCompletionProvider
 
 # llm_1 = ChatCompletionProvider(
@@ -20,13 +26,17 @@ import asyncio
 # print(response_1)
 
 
-# 用法二：主流用法，推荐
+# 用法二：目前支持的用法
+
 agent_2 = Agent(
-    base_url="https://api.agnes-ai.cn/v1",
-    api_key="sk-xYln9a5uknt3GxwgKawmzdsoRTOR4SM9TGqT4XLWMvIYI5Mv",
-    model="agnes-3.0-flash",
+    base_url=os.getenv("AGNES_BASE_URL"),
+    api_key=os.getenv("AGNES_API_KEY"),
+    model=os.getenv("AGNES_MODEL"),
     system_prompt="You are a helpful assistant.",
     llm_api_type="chat_completion",
+    temperature=0.9,
+    max_tokens=1024,
+    timeout=60
 )
 
 async def run_agent():

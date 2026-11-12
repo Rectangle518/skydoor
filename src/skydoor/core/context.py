@@ -17,6 +17,11 @@ class Conversation:
     def add_message(self, message: Message):
         self.messages.append(message)
 
+    def pop_last_message(self) -> Message | None:
+        if self.messages:
+            return self.messages.pop()
+        return None
+
     def get_messages(self):
         return self.messages
 

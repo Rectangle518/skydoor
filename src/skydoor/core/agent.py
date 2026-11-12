@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from typing import Literal
 
 from ..core.context import (
@@ -9,6 +12,10 @@ from ..core.context import (
 )
 from ..core.message import Message
 from ..llm.provider import LLMProvider
+from ..errors.exception import LLMError
+
+
+logger = logging.getLogger(__name__)
 
 ApiType = Literal["chat_completion", "messages", "responses"]
 
@@ -22,6 +29,8 @@ class Agent:
     temperature: float | None
     max_tokens: int | None
     timeout: float | None
+    max_retries: int
+    base_backoff: float
 
     def __init__(
         self,
@@ -34,6 +43,8 @@ class Agent:
         temperature: float | None = DEFAULT_TEMPERATURE,
         max_tokens: int | None = DEFAULT_MAX_TOKENS,
         timeout: float | None = DEFAULT_TIMEOUT,
+        max_retries: int = 3,
+        base_backoff: float = 1.0,
     ) -> None:
 
         self.conversation = Conversation()
@@ -44,6 +55,8 @@ class Agent:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.max_retries = max_retries          # 重试次数上限（不含首次）
+        self.base_backoff = base_backoff        # 指数退避基准秒数
 
         self.conversation.add_message(
             Message(role="system", content=self.system_prompt)
@@ -89,22 +102,60 @@ class Agent:
         # 1. 添加用户消息
         self.conversation.add_message(Message(role="user", content=user_input))
 
-        # 2. 构建 LLMRequest
-        llm_request = LLMRequest(
-            conversation=self.conversation,
-            model=self.model,
-            temperature=self.temperature if temperature is None else temperature,
-            max_tokens=self.max_tokens if max_tokens is None else max_tokens,
-            timeout=self.timeout if timeout is None else timeout,
-        )
+        try:
+            # 2. 构建 LLMRequest
+            llm_request = LLMRequest(
+                conversation=self.conversation,
+                model=self.model,
+                temperature=self.temperature if temperature is None else temperature,
+                max_tokens=self.max_tokens if max_tokens is None else max_tokens,
+                timeout=self.timeout if timeout is None else timeout,
+            )
 
-        # 3. 调用 Provider
-        llm_response = await self.llm.complete(llm_request)
+            # 3. 调用 Provider，失败时按 retryable 决定是否重试
+            try:
+                llm_response = await self.llm.complete(llm_request)
+            except LLMError as e:
+                if not e.retryable:
+                    raise
+                # 重试；_retry 内部失败时会抛出最后一次的 LLMError
+                llm_response = await self._retry(llm_request, last_error=e)
 
-        # 4. 添加 assistant 消息
-        self.conversation.add_message(
-            Message(role="assistant", content=llm_response.content)
-        )
+            # 4. 添加 assistant 消息
+            self.conversation.add_message(
+                Message(role="assistant", content=llm_response.content)
+            )
 
-        # 5. 返回响应
-        return llm_response.content
+            # 5. 返回响应
+            return llm_response.content
+
+        except Exception:
+            # 任何失败路径（含不可重试、重试耗尽、响应处理异常）
+            # 都回滚刚加入的 user 消息，保持会话一致
+            self.conversation.pop_last_message()
+            raise
+
+    async def _retry(self, llm_request: LLMRequest, *, last_error: LLMError):
+        """对可重试错误做指数退避重试，成功返回响应，耗尽则抛出最后的异常"""
+        error = last_error
+
+        for attempt in range(1, self.max_retries + 1):
+            backoff = self.base_backoff * (2 ** (attempt - 1))   # 1s, 2s, 4s...
+            logger.warning(
+                "LLM 调用失败（%s），第 %d/%d 次重试，%.1fs 后开始",
+                error, attempt, self.max_retries, backoff,
+            )
+            await asyncio.sleep(backoff)
+
+            try:
+                return await self.llm.complete(llm_request)
+            except LLMError as e:
+                if not e.retryable:
+                    # 重试过程中变成不可重试错误，立即放弃
+                    raise
+                error = e
+                # 继续下一轮
+
+        # 重试耗尽：抛出最后一次异常，保留原始 cause 链
+        logger.error("LLM 调用在 %d 次重试后仍失败", self.max_retries)
+        raise error
